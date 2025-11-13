@@ -80,7 +80,7 @@ def compute_lang_mu(df: pd.DataFrame, lang_pref: str) -> np.ndarray:
 
 
 # ---------------------------------------------------
-# 4) hlavná fuzzy funkcia (bez názvu, bez text similarity)
+# 4) hlavná fuzzy funkcia
 # ---------------------------------------------------
 def fuzzy_search(
     length_pref: str = "none",   # "short", "medium", "long", "none"
@@ -88,6 +88,7 @@ def fuzzy_search(
     rating_pref: str = "none",   # "excellent", "good", "average", "bad", "none"
     pop_pref: str = "none",      # "blockbuster", "average", "unknown", "none"
     lang_pref: str = "none",     # "EN", "CZ", "SK", "ES", "DE", "none"
+    adult_pref: str = "non_adult_only",  # "adult_only", "non_adult_only", "none"
     limit_rows_from_db: int = 50_000,
     top_n: int = 30,
     current_year: int = 2025,
@@ -96,9 +97,10 @@ def fuzzy_search(
     Fuzzy vyhľadávanie filmov podľa:
       - dĺžky (length_pref)
       - roku (year_pref)
-      - ratingu (rating_pref)
+      - ratingu (rating_pref) – rating sa ráta len pre filmy s vote_count >= 100
       - popularity (pop_pref)
       - jazyka (lang_pref)
+      - adult filtra (adult_pref)
     """
 
     # --- 4.1 načítanie dát z DB ---
@@ -109,9 +111,11 @@ def fuzzy_search(
             runtime,
             release_year,
             vote_average,
+            vote_count,
             popularity,
             spoken_languages,
-            original_language
+            original_language,
+            adult
         FROM movies
         WHERE release_year IS NOT NULL
           AND runtime IS NOT NULL
@@ -123,10 +127,19 @@ def fuzzy_search(
     # bezpečné typovanie
     df["runtime"] = pd.to_numeric(df["runtime"], errors="coerce")
     df["vote_average"] = pd.to_numeric(df["vote_average"], errors="coerce")
+    df["vote_count"] = pd.to_numeric(df["vote_count"], errors="coerce").fillna(0).astype(int)
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
     df["release_year"] = pd.to_numeric(df["release_year"], errors="coerce")
+    # adult na bool
+    df["adult"] = df["adult"].astype(bool)
 
     df = df.dropna(subset=["runtime", "vote_average", "popularity", "release_year"])
+
+    # --- 4.1.1 filter na adult filmy ---
+    if adult_pref == "adult_only":
+        df = df[df["adult"] == True]
+    elif adult_pref == "non_adult_only":
+        df = df[df["adult"] == False]
 
     if df.empty:
         return df
@@ -151,8 +164,8 @@ def fuzzy_search(
     age = current_year - df["release_year"].astype(int)
 
     mu_year_new = mu_trap(age, -1, 0, 3, 6)          # nové (cca do 5 rokov)
-    mu_year_older = mu_trap(age, 4, 8, 15, 30)       # staršie (taký middle)
-    mu_year_retro = mu_trap(age, 20, 30, 60, 120)    # retro, veľmi staré
+    mu_year_older = mu_trap(age, 4, 8, 15, 30)       # staršie
+    mu_year_retro = mu_trap(age, 20, 30, 60, 120)    # retro
 
     if year_pref == "new":
         mu_year_pref = mu_year_new
@@ -171,6 +184,15 @@ def fuzzy_search(
     mu_rating_average = mu_trap(score, 4.5, 5.5, 6.5, 7.5)
     mu_rating_bad = mu_trap(score, -1.0, 0.0, 4.5, 6.0)
 
+    # --- filter na rating podľa počtu hodnotení ---
+    # filmy s vote_count < 100 majú rating membership = 0
+    has_enough_votes = df["vote_count"] >= 100
+
+    mu_rating_excellent = np.where(has_enough_votes, mu_rating_excellent, 0.0)
+    mu_rating_good = np.where(has_enough_votes, mu_rating_good, 0.0)
+    mu_rating_average = np.where(has_enough_votes, mu_rating_average, 0.0)
+    mu_rating_bad = np.where(has_enough_votes, mu_rating_bad, 0.0)
+
     if rating_pref == "excellent":
         mu_rating_pref = mu_rating_excellent
     elif rating_pref == "good":
@@ -188,7 +210,6 @@ def fuzzy_search(
     pmax = float(pop.max())
 
     if pmax == pmin:
-        # všetko má rovnakú popularitu → ber to ako priemer
         mu_pop_unknown = np.zeros_like(pop, dtype=float)
         mu_pop_average = np.ones_like(pop, dtype=float)
         mu_pop_blockbuster = np.zeros_like(pop, dtype=float)
@@ -237,6 +258,7 @@ def fuzzy_search(
         w_lang * mu_lang
     )
 
+    # uložíme si membershipy do DF (hodí sa na debug)
     df["mu_short"] = mu_short
     df["mu_medium"] = mu_medium
     df["mu_long"] = mu_long
@@ -272,10 +294,11 @@ def fuzzy_search(
     df = df.sort_values("fuzzy_score", ascending=False)
 
     cols = [
-        "id", "title", "release_year", "runtime", "vote_average",
-        "popularity", "spoken_languages", "original_language",
-        "mu_len_pref", "mu_year_pref", "mu_rating_pref", "mu_pop_pref",
-        "mu_lang", "fuzzy_score"
+        "id", "title", "release_year", "runtime",
+        "vote_average", "vote_count", "popularity",
+        "spoken_languages", "original_language", "adult",
+        "mu_len_pref", "mu_year_pref", "mu_rating_pref",
+        "mu_pop_pref", "mu_lang", "fuzzy_score"
     ]
     return df[cols].head(top_n)
 
@@ -371,6 +394,24 @@ def _ask_lang_pref() -> str:
     return "none"
 
 
+def _ask_adult_pref() -> str:
+    """
+    Adult filter:
+      1 = len ne-adult (default)
+      2 = len adult
+      3 = všetko
+    """
+    raw = input(
+        "Adult filter: [1] len ne-adult, [2] len adult, [3] všetko (Enter = 1): "
+    ).strip()
+
+    if raw == "2":
+        return "adult_only"
+    if raw == "3":
+        return "none"
+    return "non_adult_only"
+
+
 def _ask_int(prompt: str, default: int) -> int:
     raw = input(prompt).strip()
     if raw == "":
@@ -390,6 +431,7 @@ if __name__ == "__main__":
     rating_pref = _ask_rating_pref()
     pop_pref = _ask_pop_pref()
     lang_pref = _ask_lang_pref()
+    adult_pref = _ask_adult_pref()
 
     top_n = _ask_int("Koľko výsledkov chceš zobraziť? [20]: ", default=20)
 
@@ -399,6 +441,7 @@ if __name__ == "__main__":
         rating_pref=rating_pref,
         pop_pref=pop_pref,
         lang_pref=lang_pref,
+        adult_pref=adult_pref,
         top_n=top_n,
     )
 
