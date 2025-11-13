@@ -18,8 +18,7 @@ engine = create_engine(DATABASE_URL)
 # ---------------------------------------------------
 def mu_trap(x, a, b, c, d):
     """
-    Trapezoid membership funkcia: 0 .. 1 .. 0
-    a <= b <= c <= d
+    Trapezoid membership: 0 -> 1 -> 0 na intervale [a,d]
     """
     x = np.asarray(x, dtype=float)
     res = np.zeros_like(x, dtype=float)
@@ -41,49 +40,68 @@ def mu_trap(x, a, b, c, d):
 
 def mu_sigmoid(x, x0, k):
     """
-    Sigmoid (napr. pre 'vysoké hodnotenie').
-    x0 = prah, k = strmosť.
+    Sigmoid (napr. pre 'vysoké hodnotenie' / 'nový film').
     """
     x = np.asarray(x, dtype=float)
     return 1.0 / (1.0 + np.exp(-k * (x - x0)))
 
 
-def text_similarity(a: str, b: str) -> float:
+# ---------------------------------------------------
+# 3) pomocná funkcia pre jazyk
+# ---------------------------------------------------
+def compute_lang_mu(df: pd.DataFrame, lang_pref: str) -> np.ndarray:
     """
-    Rýchla textová podobnosť 0–1:
-    Jaccard na množine slov (veľmi jednoduché, ale rýchle).
+    Jazyková "fuzzy" (v podstate crisp) membership.
+    lang_pref: "EN", "CZ", "SK", "ES", "DE", "none"
+    Pozerá do stĺpcov spoken_languages + original_language.
     """
-    if not b:
-        return 0.0
-    a = (a or "").lower().split()
-    b = b.lower().split()
-    set_a, set_b = set(a), set(b)
-    if not set_a or not set_b:
-        return 0.0
-    inter = len(set_a & set_b)
-    union = len(set_a | set_b)
-    return inter / union
+    if lang_pref == "none":
+        return np.zeros(len(df), dtype=float)
+
+    code_map = {
+        "EN": "en",
+        "CZ": "cs",
+        "SK": "sk",
+        "ES": "es",
+        "DE": "de",
+    }
+    code = code_map.get(lang_pref.upper())
+    if code is None:
+        return np.zeros(len(df), dtype=float)
+
+    def row_mu(row):
+        all_langs = (
+            str(row.get("spoken_languages", "") or "") + " " +
+            str(row.get("original_language", "") or "")
+        ).lower()
+        return 1.0 if code in all_langs else 0.0
+
+    return df.apply(row_mu, axis=1).to_numpy(dtype=float)
 
 
 # ---------------------------------------------------
-# 3) hlavná funkcia na fuzzy vyhľadávanie
+# 4) hlavná fuzzy funkcia (bez názvu, bez text similarity)
 # ---------------------------------------------------
 def fuzzy_search(
-    q_text: str = "dream",
-    prefer_short: bool = True,
-    prefer_new: bool = True,
-    high_rating: bool = True,
-    prefer_niche: bool = True,
-    limit_rows_from_db: int = 50_000,   # koľko filmov natiahnem z DB
-    n_candidates_for_text: int = 5_000, # na koľkých rátam textovú podobnosť
-    top_n: int = 30,                    # koľko výsledkov vrátim
+    length_pref: str = "none",   # "short", "medium", "long", "none"
+    year_pref: str = "none",     # "new", "older", "retro", "none"
+    rating_pref: str = "none",   # "excellent", "good", "average", "bad", "none"
+    pop_pref: str = "none",      # "blockbuster", "average", "unknown", "none"
+    lang_pref: str = "none",     # "EN", "CZ", "SK", "ES", "DE", "none"
+    limit_rows_from_db: int = 50_000,
+    top_n: int = 30,
     current_year: int = 2025,
 ) -> pd.DataFrame:
     """
-    Vráti DataFrame top_n filmov zoradených podľa fuzzy_score.
+    Fuzzy vyhľadávanie filmov podľa:
+      - dĺžky (length_pref)
+      - roku (year_pref)
+      - ratingu (rating_pref)
+      - popularity (pop_pref)
+      - jazyka (lang_pref)
     """
 
-    # --------- 3.1 načítanie dát z DB ----------
+    # --- 4.1 načítanie dát z DB ---
     sql = text("""
         SELECT
             id,
@@ -91,7 +109,9 @@ def fuzzy_search(
             runtime,
             release_year,
             vote_average,
-            popularity
+            popularity,
+            spoken_languages,
+            original_language
         FROM movies
         WHERE release_year IS NOT NULL
           AND runtime IS NOT NULL
@@ -100,7 +120,7 @@ def fuzzy_search(
 
     df = pd.read_sql(sql, engine, params={"limit_rows": limit_rows_from_db})
 
-    # bezpečné typy
+    # bezpečné typovanie
     df["runtime"] = pd.to_numeric(df["runtime"], errors="coerce")
     df["vote_average"] = pd.to_numeric(df["vote_average"], errors="coerce")
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
@@ -108,77 +128,278 @@ def fuzzy_search(
 
     df = df.dropna(subset=["runtime", "vote_average", "popularity", "release_year"])
 
-    # --------- 3.2 fuzzy membershipy (bez textu) ----------
-    # dĺžka: "krátky film" ~ 0–60–90–110 min
-    mu_len = mu_trap(df["runtime"], 0, 60, 90, 110)
+    if df.empty:
+        return df
 
-    # novota: "nový" ~ posledných 5 rokov
+    # --- 4.2 fuzzy membershipy ---
+
+    # 4.2.1 dĺžka – tri fuzzy sety
+    mu_short = mu_trap(df["runtime"], 0, 60, 90, 110)      # krátky
+    mu_medium = mu_trap(df["runtime"], 80, 100, 120, 140)  # stredný
+    mu_long = mu_trap(df["runtime"], 120, 140, 180, 260)   # dlhý
+
+    if length_pref == "short":
+        mu_len_pref = mu_short
+    elif length_pref == "medium":
+        mu_len_pref = mu_medium
+    elif length_pref == "long":
+        mu_len_pref = mu_long
+    else:
+        mu_len_pref = np.zeros_like(mu_short)
+
+    # 4.2.2 rok – nové / staršie / retro podľa veku (age)
     age = current_year - df["release_year"].astype(int)
-    mu_year = 1 - mu_sigmoid(age, x0=5, k=1.0)  # menší vek = väčšia μ
 
-    # hodnotenie: "vysoké" od 7.0 vyššie
-    mu_rate = mu_sigmoid(df["vote_average"], x0=7.0, k=1.2)
+    mu_year_new = mu_trap(age, -1, 0, 3, 6)          # nové (cca do 5 rokov)
+    mu_year_older = mu_trap(age, 4, 8, 15, 30)       # staršie (taký middle)
+    mu_year_retro = mu_trap(age, 20, 30, 60, 120)    # retro, veľmi staré
 
-    # popularita: "niche" = klesajúca funkcia popularity
-    mu_pop = 1.0 / (1.0 + (df["popularity"] / 50.0))
+    if year_pref == "new":
+        mu_year_pref = mu_year_new
+    elif year_pref == "older":
+        mu_year_pref = mu_year_older
+    elif year_pref == "retro":
+        mu_year_pref = mu_year_retro
+    else:
+        mu_year_pref = np.zeros_like(mu_year_new)
 
-    # váhy podľa preferencií
-    w_len = 0.35 if prefer_short else 0.10
-    w_year = 0.25 if prefer_new else 0.10
-    w_rate = 0.25 if high_rating else 0.10
-    w_pop = 0.15 if prefer_niche else 0.05
+    # 4.2.3 rating – vynikajúce / dobre / priemerne / zle
+    score = df["vote_average"]
+
+    mu_rating_excellent = mu_trap(score, 7.5, 8.5, 10.0, 11.0)
+    mu_rating_good = mu_trap(score, 6.0, 7.0, 8.0, 9.0)
+    mu_rating_average = mu_trap(score, 4.5, 5.5, 6.5, 7.5)
+    mu_rating_bad = mu_trap(score, -1.0, 0.0, 4.5, 6.0)
+
+    if rating_pref == "excellent":
+        mu_rating_pref = mu_rating_excellent
+    elif rating_pref == "good":
+        mu_rating_pref = mu_rating_good
+    elif rating_pref == "average":
+        mu_rating_pref = mu_rating_average
+    elif rating_pref == "bad":
+        mu_rating_pref = mu_rating_bad
+    else:
+        mu_rating_pref = np.zeros_like(mu_rating_excellent)
+
+    # 4.2.4 popularita – dynamicky podľa distribúcie
+    pop = df["popularity"].astype(float)
+    pmin = float(pop.min())
+    pmax = float(pop.max())
+
+    if pmax == pmin:
+        # všetko má rovnakú popularitu → ber to ako priemer
+        mu_pop_unknown = np.zeros_like(pop, dtype=float)
+        mu_pop_average = np.ones_like(pop, dtype=float)
+        mu_pop_blockbuster = np.zeros_like(pop, dtype=float)
+    else:
+        q1 = float(pop.quantile(0.33))
+        q2 = float(pop.quantile(0.66))
+
+        mu_pop_unknown = mu_trap(pop, pmin - 1, pmin, q1, q2)
+        mu_pop_average = mu_trap(pop, q1 * 0.8, q1, q2, q2 * 1.2)
+        mu_pop_blockbuster = mu_trap(pop, q2, q2 * 1.05, pmax, pmax * 1.05)
+
+    if pop_pref == "unknown":
+        mu_pop_pref = mu_pop_unknown
+    elif pop_pref == "average":
+        mu_pop_pref = mu_pop_average
+    elif pop_pref == "blockbuster":
+        mu_pop_pref = mu_pop_blockbuster
+    else:
+        mu_pop_pref = np.zeros_like(pop, dtype=float)
+
+    # 4.2.5 jazyk – z `spoken_languages` + `original_language`
+    mu_lang = compute_lang_mu(df, lang_pref)
+
+    # --- 4.3 váhy (podľa toho, čo ťa zaujíma) ---
+    w_len = 0.20 if length_pref != "none" else 0.05
+    w_year = 0.20 if year_pref != "none" else 0.05
+    w_rating = 0.25 if rating_pref != "none" else 0.05
+    w_pop = 0.20 if pop_pref != "none" else 0.05
+    w_lang = 0.15 if lang_pref != "none" else 0.0
+
+    weights = np.array([w_len, w_year, w_rating, w_pop, w_lang], dtype=float)
+    total_w = weights.sum()
+    if total_w == 0:
+        # fallback – keby si dal všade "none"
+        weights = np.array([0.2, 0.2, 0.2, 0.2, 0.2], dtype=float)
+        total_w = 1.0
+    weights /= total_w
+
+    w_len, w_year, w_rating, w_pop, w_lang = weights
 
     base_score = (
-        w_len * mu_len +
-        w_year * mu_year +
-        w_rate * mu_rate +
-        w_pop * mu_pop
+        w_len * mu_len_pref +
+        w_year * mu_year_pref +
+        w_rating * mu_rating_pref +
+        w_pop * mu_pop_pref +
+        w_lang * mu_lang
     )
 
-    df["mu_len"] = mu_len
-    df["mu_year"] = mu_year
-    df["mu_rate"] = mu_rate
-    df["mu_pop"] = mu_pop
-    df["base_score"] = base_score
+    df["mu_short"] = mu_short
+    df["mu_medium"] = mu_medium
+    df["mu_long"] = mu_long
+    df["mu_len_pref"] = mu_len_pref
 
-    # hrubý filter – dropni úplne slabé filmy
-    df = df[df["base_score"] > 0.2]
+    df["mu_year_new"] = mu_year_new
+    df["mu_year_older"] = mu_year_older
+    df["mu_year_retro"] = mu_year_retro
+    df["mu_year_pref"] = mu_year_pref
+
+    df["mu_rating_excellent"] = mu_rating_excellent
+    df["mu_rating_good"] = mu_rating_good
+    df["mu_rating_average"] = mu_rating_average
+    df["mu_rating_bad"] = mu_rating_bad
+    df["mu_rating_pref"] = mu_rating_pref
+
+    df["mu_pop_unknown"] = mu_pop_unknown
+    df["mu_pop_average"] = mu_pop_average
+    df["mu_pop_blockbuster"] = mu_pop_blockbuster
+    df["mu_pop_pref"] = mu_pop_pref
+
+    df["mu_lang"] = mu_lang
+
+    df["fuzzy_score"] = base_score
+
+    # hrubý filter – vyhoď úplne slabé filmy
+    df = df[df["fuzzy_score"] > 0.2]
 
     if df.empty:
-        return df  # nič nenašiel
+        return df
 
-    # --------- 3.3 textová podobnosť len na top kandidátoch ----------
-    n_cand = min(len(df), n_candidates_for_text)
-    df = df.nlargest(n_cand, "base_score").copy()
-
-    df["mu_text"] = df["title"].apply(lambda t: text_similarity(t, q_text))
-
-    # finálne skóre = base * (0.6 + 0.4 * mu_text)
-    df["fuzzy_score"] = df["base_score"] * (0.6 + 0.4 * df["mu_text"])
-
-    # --------- 3.4 zoradenie a výber stĺpcov ----------
+    # zoradenie
     df = df.sort_values("fuzzy_score", ascending=False)
 
     cols = [
-        "id", "title", "release_year", "runtime", "vote_average", "popularity",
-        "mu_len", "mu_year", "mu_rate", "mu_pop", "mu_text", "fuzzy_score"
+        "id", "title", "release_year", "runtime", "vote_average",
+        "popularity", "spoken_languages", "original_language",
+        "mu_len_pref", "mu_year_pref", "mu_rating_pref", "mu_pop_pref",
+        "mu_lang", "fuzzy_score"
     ]
     return df[cols].head(top_n)
 
 
 # ---------------------------------------------------
-# 4) demo spustenie
+# 5) CLI vstup – výbery kategórií
 # ---------------------------------------------------
+def _ask_length_pref() -> str:
+    """
+    s = short, m = medium, l = long, Enter = none
+    """
+    raw = input(
+        "Akú dĺžku filmu preferuješ? "
+        "[s] krátky, [m] stredný, [l] dlhý, Enter = je mi to jedno: "
+    ).strip().lower()
+
+    if raw == "s":
+        return "short"
+    if raw == "m":
+        return "medium"
+    if raw == "l":
+        return "long"
+    return "none"
+
+
+def _ask_year_pref() -> str:
+    """
+    n = nové, s = staršie, r = retro, Enter = none
+    """
+    raw = input(
+        "Aký vek filmu chceš? "
+        "[n] nové, [s] staršie, [r] retro, Enter = je mi to jedno: "
+    ).strip().lower()
+
+    if raw == "n":
+        return "new"
+    if raw == "s":
+        return "older"
+    if raw == "r":
+        return "retro"
+    return "none"
+
+
+def _ask_rating_pref() -> str:
+    """
+    1 = vynikajúce, 2 = dobré, 3 = priemerné, 4 = zlé, Enter = none
+    """
+    raw = input(
+        "Aký rating preferuješ? "
+        "[1] vynikajúce, [2] dobré, [3] priemerné, [4] zlé, Enter = je mi to jedno: "
+    ).strip().lower()
+
+    if raw == "1":
+        return "excellent"
+    if raw == "2":
+        return "good"
+    if raw == "3":
+        return "average"
+    if raw == "4":
+        return "bad"
+    return "none"
+
+
+def _ask_pop_pref() -> str:
+    """
+    b = blockbuster, p = priemerné, n = neznáme, Enter = none
+    """
+    raw = input(
+        "Akú popularitu chceš? "
+        "[b] blockbuster, [p] priemerné, [n] neznáme, Enter = je mi to jedno: "
+    ).strip().lower()
+
+    if raw == "b":
+        return "blockbuster"
+    if raw == "p":
+        return "average"
+    if raw == "n":
+        return "unknown"
+    return "none"
+
+
+def _ask_lang_pref() -> str:
+    """
+    Jazyk: EN, CZ, SK, ES, DE alebo Enter = none
+    """
+    raw = input(
+        "Preferovaný jazyk? "
+        "[EN] English, [CZ] Czech, [SK] Slovak, [ES] Spanish, [DE] German, Enter = je mi to jedno: "
+    ).strip().upper()
+
+    if raw in ("EN", "CZ", "SK", "ES", "DE"):
+        return raw
+    return "none"
+
+
+def _ask_int(prompt: str, default: int) -> int:
+    raw = input(prompt).strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print("Neplatné číslo, beriem default:", default)
+        return default
+
+
 if __name__ == "__main__":
-    # príklad: hľadám krátke, nové, dobre hodnotené, skôr niche filmy,
-    # ktorých názov súvisí so slovom "dream"
+    print("=== Fuzzy vyhľadávanie filmov (bez názvu) ===")
+
+    length_pref = _ask_length_pref()
+    year_pref = _ask_year_pref()
+    rating_pref = _ask_rating_pref()
+    pop_pref = _ask_pop_pref()
+    lang_pref = _ask_lang_pref()
+
+    top_n = _ask_int("Koľko výsledkov chceš zobraziť? [20]: ", default=20)
+
     results = fuzzy_search(
-        q_text="dream",
-        prefer_short=True,
-        prefer_new=True,
-        high_rating=True,
-        prefer_niche=True,
-        top_n=20
+        length_pref=length_pref,
+        year_pref=year_pref,
+        rating_pref=rating_pref,
+        pop_pref=pop_pref,
+        lang_pref=lang_pref,
+        top_n=top_n,
     )
 
     pd.set_option("display.max_colwidth", 80)
