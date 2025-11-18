@@ -186,5 +186,3 @@ Returns top-N results sorted by fuzzy_score
 ```
 
 ---
-
-If chceš, môžem ti ešte spraviť aj komplet **README with badges**, **screenshots**, **examples**, alebo **GitHub-ready formatting** podľa tvojej témy.
