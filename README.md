@@ -9,55 +9,55 @@
 
 ## **📌 Overview**
 
-**Fuzzy Movie Search** is a Python tool for searching movies using **fuzzy logic**, rather than binary filters.
-Instead of “long movies only”, you get *how much* a movie matches your preference.
+**Fuzzy Movie Search** is a Python-based tool that ranks movies using **fuzzy logic** instead of rigid filters.
+It evaluates how well each movie matches your preferences (length, year, rating, popularity, language), computes a **fuzzy score**, and returns the top results.
 
-It loads movie metadata from a PostgreSQL database, evaluates fuzzy membership functions, and ranks movies by a final **fuzzy_score**.
-
-Supports both:
+Works both as:
 
 * ✔ Interactive CLI
-* ✔ Programmable API (import & call function)
+* ✔ Importable Python module
 
 ---
 
 ## **🎬 Dataset**
 
-This project uses the official public dataset:
+This project uses the public dataset:
 
 **TMDB Movies Dataset 2023 (930k+ movies)**
 🔗 [https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
 
-Included fields:
+---
 
-* Title
-* Runtime
-* Release year
-* Popularity
-* Rating + vote count
-* Languages
-* Companies, countries, genres, etc.
+## **🌐 Public Read-Only Database Access**
 
-You import the dataset into PostgreSQL and the tool fetches data using SQLAlchemy.
+For convenience and testing, a **publicly accessible read-only PostgreSQL database** is provided:
+
+```
+DATABASE_URL = jdbc:postgresql://ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?user=reader&password=npg_AS4rd3XwVvoH&sslmode=require&channelBinding=require
+```
+
+This Neon database contains the full processed TMDB Movies dataset.
+
+⚠ **Note:**
+
+* This URL is *read-only*
+* Safe for public use
+* No risk of modification or deletion
+
+You can copy this directly into `.env` (converted to standard SQLAlchemy format if needed).
 
 ---
 
 ## **✨ Features**
 
-| Category       | Options                            |
-| -------------- | ---------------------------------- |
-| **Length**     | short / medium / long              |
-| **Movie Age**  | new / older / retro                |
-| **Rating**     | excellent / good / average / bad   |
-| **Popularity** | blockbuster / average / unknown    |
-| **Language**   | EN, CZ, SK, ES, DE                 |
-| **Other**      | weighted scoring, flexible filters |
-
-Additional logic:
-
-* Rejects movies with very low fuzzy_score
-* Rejects movies with insufficient rating info (e.g., <100 votes)
-* Normalizes weights only for enabled filters
+| Category             | Options                                                     |
+| -------------------- | ----------------------------------------------------------- |
+| **Length**           | short / medium / long                                       |
+| **Movie Age**        | new / older / retro                                         |
+| **Rating**           | excellent / good / average / bad                            |
+| **Popularity**       | blockbuster / average / unknown                             |
+| **Language Filters** | EN, CZ, SK, ES, DE                                          |
+| **Other**            | weighted scoring, fuzzy normalization, vote-count filtering |
 
 ---
 
@@ -83,17 +83,19 @@ project/
 pip install -r requirements.txt
 ```
 
-### 2. Create `.env` file
+### 2. Create `.env`
 
 ```
-DATABASE_URL=postgresql://user:password@host:port/database
+DATABASE_URL=postgresql://user:pass@host:port/db
 ```
 
-Example:
+Or use the **public read-only DB**:
 
 ```
-DATABASE_URL=postgresql://myuser:mypass@ep-example.eu-central-1.aws.neon.tech/neondb
+DATABASE_URL=postgresql://reader:npg_AS4rd3XwVvoH@ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require&channelBinding=require
 ```
+
+(Identical to the JDBC version but usable by SQLAlchemy.)
 
 ---
 
@@ -101,57 +103,46 @@ DATABASE_URL=postgresql://myuser:mypass@ep-example.eu-central-1.aws.neon.tech/ne
 
 ### **A) Interactive CLI**
 
-Run:
-
 ```bash
 python fuzzy_search.py
 ```
 
-You will be asked for:
+You will be asked to choose:
 
-* movie length
+* length
 * year
 * rating
 * popularity
 * language
 * number of results
 
-And you get sorted results in your terminal.
-
 ---
 
-### **B) Use it as a Python module**
+### **B) Use as a Python module**
 
 ```python
 from fuzzy_search import fuzzy_search
 
 df = fuzzy_search(
     length_pref="medium",
-    year_pref="older",
+    year_pref="new",
     rating_pref="excellent",
     pop_pref="blockbuster",
     lang_pref="EN",
-    top_n=15,
+    top_n=10,
 )
 
 print(df)
 ```
 
-Run:
-
-```bash
-python run_search.py
-```
-
 ---
 
-### **C) Optional: Create a shortcut**
+### **C) Optional: create a shortcut**
 
-#### macOS / Linux
+#### macOS/Linux
 
 ```bash
-echo 'alias fuzzy="python /path/to/project/fuzzy_search.py"' >> ~/.zshrc
-source ~/.zshrc
+alias fuzzy="python /path/to/project/fuzzy_search.py"
 ```
 
 #### Windows PowerShell
@@ -160,42 +151,28 @@ source ~/.zshrc
 Set-Alias fuzzy "python C:\path\to\project\fuzzy_search.py"
 ```
 
-Then run:
+---
 
-```bash
-fuzzy
+## **🧠 Fuzzy Logic Explained (Short)**
+
+Each category uses trapezoidal membership functions, e.g.:
+
 ```
+short movie: 0–60 → rising, 60–90 → full, 90–110 → decreasing
+```
+
+Each preference returns values from **0.0 to 1.0**.
+Weighted categories are combined:
+
+```
+fuzzy_score = Σ( weight_i × membership_i )
+```
+
+Movies with poor matches (score < 0.2) are removed.
 
 ---
 
-## **🧠 How Fuzzy Logic Works (Short Version)**
-
-We use **trapezoidal membership functions** like:
-
-```
-0 → rising edge → plateau → falling edge → 0
-```
-
-Example for "short movie":
-
-```
-0–60 min → rises
-60–90 min → full membership
-90–110 min → decreasing
-```
-
-Every category produces a membership value in **[0, 1]**.
-All categories are weighted and combined into:
-
-```
-fuzzy_score = Σ weight_i * membership_i
-```
-
-Movies with extremely low match score (<0.2) are removed.
-
----
-
-## **🛠 Requirements**
+## **📦 Requirements**
 
 * Python 3.10+
 * PostgreSQL 14+
@@ -211,20 +188,19 @@ Movies with extremely low match score (<0.2) are removed.
 
 ## **❗ Troubleshooting**
 
-### **DATABASE_URL is not set**
+### “DATABASE_URL is not set”
 
-Your `.env` is missing. Create one.
+Create `.env`.
 
-### **psycopg2 import errors**
+### psycopg2 errors
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### **High CPU / RAM**
+### Nothing happens / fuzzy doesn't run
 
-Nothing runs automatically.
-The fuzzy search only executes when you run the function.
+The code executes **only when called** — not on import.
 
 ---
 
@@ -232,16 +208,17 @@ The fuzzy search only executes when you run the function.
 
 ```
 pip install -r requirements.txt
-Create .env with DATABASE_URL
+Add .env with DATABASE_URL
 Run: python fuzzy_search.py
-Dataset: Kaggle TMDB Movies 2023 (930k+ movies)
-Supports fuzzy filters: length, year, rating, popularity, language
-Outputs ranked results by fuzzy_score
+Dataset: TMDB Movies 2023 (Kaggle, 930k+ movies)
+Public DB available (read-only)
+Fuzzy filters: length, year, rating, popularity, language
+Returns ranked movies by fuzzy_score
 ```
 
 ---
 
 ## **📜 License**
 
-MIT License — free to use, modify, and distribute.
+MIT License.
 
