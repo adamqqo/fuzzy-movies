@@ -1,81 +1,199 @@
 # **Fuzzy Movie Search 🎥✨**
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+*(This README was written with assistance from AI.)*
+
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)]()
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-green.svg)]()
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
-[![Kaggle Dataset](https://img.shields.io/badge/Data-Kaggle%20930k%20Movies-lightgrey.svg)](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
+[![Dataset](https://img.shields.io/badge/Dataset-TMDB%20930k%20Movies-blue.svg)](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
 
 ---
 
-## **📌 Overview**
+## 📌 Overview
 
-**Fuzzy Movie Search** is a Python-based tool that ranks movies using **fuzzy logic** instead of rigid filters.
-It evaluates how well each movie matches your preferences (length, year, rating, popularity, language), computes a **fuzzy score**, and returns the top results.
+Fuzzy Movie Search is a Python tool that ranks movies using **fuzzy logic**, which evaluates *how well* each film matches your preferences instead of filtering them strictly.
 
-Works both as:
+For example:
 
-* ✔ Interactive CLI
-* ✔ Importable Python module
+* A 95-minute movie can still partially fit “short.”
+* A 2012 movie can be “somewhat older.”
+* A film with high popularity and good rating contributes more to the final score.
+
+This approach gives **smoother, more intuitive search results** than classic filtering.
+
+The tool supports:
+
+* interactive CLI mode
+* programmatic usage in Python
 
 ---
 
-## **🎬 Dataset**
+## 🎬 Dataset
 
-This project uses the public dataset:
+The tool uses the following public movie dataset:
 
-**TMDB Movies Dataset 2023 (930k+ movies)**
+**TMDB Movies Dataset 2023 (930,000+ movies)**
 🔗 [https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
 
 ---
 
-## **🌐 Public Read-Only Database Access**
+## 🌐 Public Read-Only Database
 
-For convenience and testing, a **publicly accessible read-only PostgreSQL database** is provided:
+A public PostgreSQL Neon database is available for testing:
 
 ```
-DATABASE_URL = jdbc:postgresql://ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?user=reader&password=npg_AS4rd3XwVvoH&sslmode=require&channelBinding=require
+jdbc:postgresql://ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?user=reader&password=npg_AS4rd3XwVvoH&sslmode=require&channelBinding=require
 ```
 
-This Neon database contains the full processed TMDB Movies dataset.
+SQLAlchemy-compatible version:
 
-⚠ **Note:**
+```
+postgresql://reader:npg_AS4rd3XwVvoH@ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require&channelBinding=require
+```
 
-* This URL is *read-only*
-* Safe for public use
-* No risk of modification or deletion
+This database includes:
 
-You can copy this directly into `.env` (converted to standard SQLAlchemy format if needed).
+* titles
+* runtimes
+* release years
+* ratings (vote_average, vote_count)
+* popularity
+* languages
+* adult flag
 
 ---
 
-## **✨ Features**
+# 🧠 How the Fuzzy System Works
 
-| Category             | Options                                                     |
-| -------------------- | ----------------------------------------------------------- |
-| **Length**           | short / medium / long                                       |
-| **Movie Age**        | new / older / retro                                         |
-| **Rating**           | excellent / good / average / bad                            |
-| **Popularity**       | blockbuster / average / unknown                             |
-| **Language Filters** | EN, CZ, SK, ES, DE                                          |
-| **Other**            | weighted scoring, fuzzy normalization, vote-count filtering |
+The search engine evaluates each movie using several **fuzzy categories**.
+Each category produces a score from **0.0 to 1.0**, representing how well the movie matches your preference.
+
+The final result is a weighted combination of these scores.
+
+Below is a simple, user-friendly explanation of each part:
 
 ---
 
-## **📁 Project Structure**
+## 1️⃣ Movie Length (short / medium / long)
+
+Length is not treated as a strict cutoff.
+
+Example:
+
+* A 70-minute film fits “short” strongly.
+* A 95-minute film fits “short” only partially.
+* A 150-minute film fits “long” strongly.
+
+This is done using smooth, trapezoid-shaped curves so movies transition naturally between categories.
+
+---
+
+## 2️⃣ Movie Age (new / older / retro)
+
+Instead of choosing a hard release year like “after 2020,” the system evaluates by **movie age**:
+
+* **new:** 0–5 years
+* **older:** 5–20 years
+* **retro:** 20+ years
+
+A 7-year-old film, for example, partially fits both “new” and “older,” which makes results more flexible.
+
+---
+
+## 3️⃣ Rating (excellent / good / average / bad)
+
+Ratings also use smooth categories:
+
+* excellent: 8.5+
+* good: around 7
+* average: around 5.5
+* bad: under ~5
+
+Additionally:
+**Movies with fewer than 100 votes do not contribute rating score**
+(because they aren’t reliable).
+
+---
+
+## 4️⃣ Popularity (unknown / average / blockbuster)
+
+Popularity varies wildly between datasets, so the system automatically adapts.
+
+It splits movies into:
+
+* low popularity
+* middle range
+* top performers
+
+This is calculated using percentiles, so the three categories adjust to the dataset’s distribution.
+
+---
+
+## 5️⃣ Language
+
+Language matching is simple and direct:
+
+If your preference is EN:
+
+* movies that contain “en” in spoken or original language → score 1.0
+* all others → 0.0
+
+Since language does not have degrees like “somewhat English,” this is intentionally crisp.
+
+---
+
+## 6️⃣ Adult Content Filter
+
+This is handled *before* applying fuzzy logic:
+
+* only non-adult movies
+* only adult movies
+* include both
+
+This ensures adult filtering remains predictable and safe.
+
+---
+
+## 7️⃣ Weighted Scoring
+
+Not all preferences are equally important.
+If a user selects a preference, it receives a **higher weight**.
+If a preference is skipped, it gets a **lower weight**.
+
+Weights are always normalized so they add up to **1.0**.
+
+---
+
+## 8️⃣ Final Score
+
+Every movie receives a final score:
+
+```
+fuzzy_score =
+    w_length * length_match +
+    w_age    * age_match +
+    w_rating * rating_match +
+    w_pop    * popularity_match +
+    w_lang   * language_match
+```
+
+Movies with very low scores (<0.2) are removed, and the rest are sorted from best to worst.
+
+---
+
+# 📁 Project Structure
 
 ```
 project/
-│
 ├── fuzzy_search.py
 ├── config.py
 ├── requirements.txt
-├── README.md
-└── .env   (you create this)
+└── README.md
 ```
 
 ---
 
-## **⚙ Installation**
+# ⚙ Installation
 
 ### 1. Install dependencies
 
@@ -86,39 +204,36 @@ pip install -r requirements.txt
 ### 2. Create `.env`
 
 ```
-DATABASE_URL=postgresql://user:pass@host:port/db
+DATABASE_URL=postgresql://reader:npg_AS4rd3XwVvoH@ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require
 ```
-
-Or use the **public read-only DB**:
-
-```
-DATABASE_URL=postgresql://reader:npg_AS4rd3XwVvoH@ep-bitter-breeze-ago1woyt-pooler.c-2.eu-central-1.aws.neon.tech/neondb?sslmode=require&channelBinding=require
-```
-
-(Identical to the JDBC version but usable by SQLAlchemy.)
 
 ---
 
-## **▶ Running the Search**
+# ▶ How to Use
 
-### **A) Interactive CLI**
+## A) CLI Mode
+
+Run:
 
 ```bash
 python fuzzy_search.py
 ```
 
-You will be asked to choose:
+The script will ask you:
 
-* length
-* year
+* preferred length
+* age
 * rating
 * popularity
 * language
+* adult filter
 * number of results
+
+Results will be printed as a table.
 
 ---
 
-### **B) Use as a Python module**
+## B) Use from Python
 
 ```python
 from fuzzy_search import fuzzy_search
@@ -127,9 +242,9 @@ df = fuzzy_search(
     length_pref="medium",
     year_pref="new",
     rating_pref="excellent",
-    pop_pref="blockbuster",
+    pop_pref="average",
     lang_pref="EN",
-    top_n=10,
+    top_n=20,
 )
 
 print(df)
@@ -137,88 +252,46 @@ print(df)
 
 ---
 
-### **C) Optional: create a shortcut**
+## C) Create a Shortcut (Optional)
 
-#### macOS/Linux
+Linux/macOS:
 
 ```bash
-alias fuzzy="python /path/to/project/fuzzy_search.py"
+alias fuzzy="python /path/to/fuzzy_search.py"
 ```
 
-#### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
-Set-Alias fuzzy "python C:\path\to\project\fuzzy_search.py"
+Set-Alias fuzzy "python C:\path\to\fuzzy_search.py"
 ```
 
 ---
 
-## **🧠 Fuzzy Logic Explained (Short)**
-
-Each category uses trapezoidal membership functions, e.g.:
-
-```
-short movie: 0–60 → rising, 60–90 → full, 90–110 → decreasing
-```
-
-Each preference returns values from **0.0 to 1.0**.
-Weighted categories are combined:
-
-```
-fuzzy_score = Σ( weight_i × membership_i )
-```
-
-Movies with poor matches (score < 0.2) are removed.
-
----
-
-## **📦 Requirements**
-
-* Python 3.10+
-* PostgreSQL 14+
-* Libraries:
-
-  * pandas
-  * numpy
-  * SQLAlchemy
-  * psycopg2-binary
-  * python-dotenv
-
----
-
-## **❗ Troubleshooting**
+# ❗ Troubleshooting
 
 ### “DATABASE_URL is not set”
 
-Create `.env`.
+Add it to `.env`.
 
-### psycopg2 errors
+### “Cannot connect to database”
 
-```bash
-pip install -r requirements.txt
+Ensure:
+
+```
+?sslmode=require
 ```
 
-### Nothing happens / fuzzy doesn't run
+### Empty results
 
-The code executes **only when called** — not on import.
+Some combinations are too strict.
+Try loosening preferences.
 
 ---
 
-## **📌 Quick Copy Snippet**
-
-```
-pip install -r requirements.txt
-Add .env with DATABASE_URL
-Run: python fuzzy_search.py
-Dataset: TMDB Movies 2023 (Kaggle, 930k+ movies)
-Public DB available (read-only)
-Fuzzy filters: length, year, rating, popularity, language
-Returns ranked movies by fuzzy_score
-```
-
----
-
-## **📜 License**
+# 📜 License
 
 MIT License.
 
+
+Just say the word.
