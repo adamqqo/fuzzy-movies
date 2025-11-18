@@ -92,6 +92,7 @@ def fuzzy_search(
     limit_rows_from_db: int = 500_000,
     top_n: int = 30,
     current_year: int = 2025,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Fuzzy vyhľadávanie filmov podľa:
@@ -104,6 +105,9 @@ def fuzzy_search(
     """
 
     # --- 4.1 načítanie dát z DB ---
+    if verbose:
+        print("📥  Krok 1/5: Načítavam dáta z databázy...")
+
     sql = text("""
         SELECT
             id,
@@ -130,26 +134,35 @@ def fuzzy_search(
     df["vote_count"] = pd.to_numeric(df["vote_count"], errors="coerce").fillna(0).astype(int)
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
     df["release_year"] = pd.to_numeric(df["release_year"], errors="coerce")
-    # adult na bool
     df["adult"] = df["adult"].astype(bool)
 
     df = df.dropna(subset=["runtime", "vote_average", "popularity", "release_year"])
 
     # --- 4.1.1 filter na adult filmy ---
+    if verbose:
+        print("🔎  Krok 2/5: Aplikujem hard filter na adult filmy...")
+
     if adult_pref == "adult_only":
         df = df[df["adult"] == True]
     elif adult_pref == "non_adult_only":
         df = df[df["adult"] == False]
 
     if df.empty:
+        if verbose:
+            print("❗ Po filtroch neostal žiadny film.")
         return df
 
     # --- 4.2 fuzzy membershipy ---
+    if verbose:
+        print("🧮  Krok 3/5: Počítam fuzzy membership funkcie pre jednotlivé kritériá...")
 
     # 4.2.1 dĺžka – tri fuzzy sety
-    mu_short = mu_trap(df["runtime"], 0, 60, 90, 110)      # krátky
-    mu_medium = mu_trap(df["runtime"], 80, 100, 120, 140)  # stredný
-    mu_long = mu_trap(df["runtime"], 120, 140, 180, 260)   # dlhý
+    # krátky: max ~ 90 min
+    mu_short = mu_trap(df["runtime"], 0, 60, 90, 110)
+    # stredný: okolo 100–120 min
+    mu_medium = mu_trap(df["runtime"], 80, 100, 120, 140)
+    # dlhý: 2+ hodiny
+    mu_long = mu_trap(df["runtime"], 120, 140, 180, 260)
 
     if length_pref == "short":
         mu_len_pref = mu_short
@@ -163,9 +176,12 @@ def fuzzy_search(
     # 4.2.2 rok – nové / staršie / retro podľa veku (age)
     age = current_year - df["release_year"].astype(int)
 
-    mu_year_new = mu_trap(age, -1, 0, 3, 6)          # nové (cca do 5 rokov)
-    mu_year_older = mu_trap(age, 4, 8, 15, 30)       # staršie
-    mu_year_retro = mu_trap(age, 20, 30, 60, 120)    # retro
+    # nové: cca 0–5 rokov
+    mu_year_new = mu_trap(age, -1, 0, 3, 6)
+    # staršie: 5–20 rokov
+    mu_year_older = mu_trap(age, 4, 8, 15, 30)
+    # retro: >20 rokov
+    mu_year_retro = mu_trap(age, 20, 30, 60, 120)
 
     if year_pref == "new":
         mu_year_pref = mu_year_new
@@ -217,8 +233,11 @@ def fuzzy_search(
         q1 = float(pop.quantile(0.33))
         q2 = float(pop.quantile(0.66))
 
+        # neznáme: skôr nízka popularita
         mu_pop_unknown = mu_trap(pop, pmin - 1, pmin, q1, q2)
+        # priemerné: okolo stredu distribúcie
         mu_pop_average = mu_trap(pop, q1 * 0.8, q1, q2, q2 * 1.2)
+        # blockbuster: horná tretina
         mu_pop_blockbuster = mu_trap(pop, q2, q2 * 1.05, pmax, pmax * 1.05)
 
     if pop_pref == "unknown":
@@ -234,21 +253,47 @@ def fuzzy_search(
     mu_lang = compute_lang_mu(df, lang_pref)
 
     # --- 4.3 váhy (podľa toho, čo ťa zaujíma) ---
-    w_len = 0.20 if length_pref != "none" else 0.05
-    w_year = 0.20 if year_pref != "none" else 0.05
-    w_rating = 0.25 if rating_pref != "none" else 0.05
-    w_pop = 0.20 if pop_pref != "none" else 0.05
-    w_lang = 0.15 if lang_pref != "none" else 0.0
+    if verbose:
+        print("⚖️  Krok 4/5: Nastavujem váhy pre jednotlivé kritériá...")
 
-    weights = np.array([w_len, w_year, w_rating, w_pop, w_lang], dtype=float)
-    total_w = weights.sum()
-    if total_w == 0:
-        # fallback – keby si dal všade "none"
-        weights = np.array([0.2, 0.2, 0.2, 0.2, 0.2], dtype=float)
-        total_w = 1.0
-    weights /= total_w
+    # "surové" váhy podľa toho, či je kritérium zapnuté
+    raw_w_len = 0.20 if length_pref != "none" else 0.05
+    raw_w_year = 0.20 if year_pref != "none" else 0.05
+    raw_w_rating = 0.25 if rating_pref != "none" else 0.05
+    raw_w_pop = 0.20 if pop_pref != "none" else 0.05
+    raw_w_lang = 0.15 if lang_pref != "none" else 0.0
 
+    raw_weights = np.array([raw_w_len, raw_w_year, raw_w_rating, raw_w_pop, raw_w_lang], dtype=float)
+    total_raw = raw_weights.sum()
+
+    if total_raw == 0:
+        raw_weights = np.array([0.2, 0.2, 0.2, 0.2, 0.2], dtype=float)
+        total_raw = 1.0
+
+    weights = raw_weights / total_raw
     w_len, w_year, w_rating, w_pop, w_lang = weights
+
+    if verbose:
+        print("   Surové váhy (pred normalizáciou):")
+        print(f"     length   (dĺžka)    = {raw_w_len:.3f}")
+        print(f"     year     (vek)      = {raw_w_year:.3f}")
+        print(f"     rating   (rating)   = {raw_w_rating:.3f}")
+        print(f"     pop      (popul.)   = {raw_w_pop:.3f}")
+        print(f"     lang     (jazyk)    = {raw_w_lang:.3f}")
+        print(f"     súčet               = {total_raw:.3f}\n")
+
+        print("   Normalizované váhy (súčet = 1):")
+        print(f"     w_length   = {w_len:.3f}")
+        print(f"     w_year     = {w_year:.3f}")
+        print(f"     w_rating   = {w_rating:.3f}")
+        print(f"     w_popular  = {w_pop:.3f}")
+        print(f"     w_language = {w_lang:.3f}\n")
+
+    # finálne fuzzy skóre
+    if verbose:
+        print("🧩  Krok 5/5: Skladám fuzzy skóre pre každý film...")
+        print("     fuzzy_score = w_len*μ_len_pref + w_year*μ_year_pref + "
+              "w_rating*μ_rating_pref + w_pop*μ_pop_pref + w_lang*μ_lang\n")
 
     base_score = (
         w_len * mu_len_pref +
@@ -258,36 +303,20 @@ def fuzzy_search(
         w_lang * mu_lang
     )
 
-    # uložíme si membershipy do DF (hodí sa na debug)
-    df["mu_short"] = mu_short
-    df["mu_medium"] = mu_medium
-    df["mu_long"] = mu_long
+    # uložíme si membershipy do DF (hodí sa na debug / prezentáciu)
     df["mu_len_pref"] = mu_len_pref
-
-    df["mu_year_new"] = mu_year_new
-    df["mu_year_older"] = mu_year_older
-    df["mu_year_retro"] = mu_year_retro
     df["mu_year_pref"] = mu_year_pref
-
-    df["mu_rating_excellent"] = mu_rating_excellent
-    df["mu_rating_good"] = mu_rating_good
-    df["mu_rating_average"] = mu_rating_average
-    df["mu_rating_bad"] = mu_rating_bad
     df["mu_rating_pref"] = mu_rating_pref
-
-    df["mu_pop_unknown"] = mu_pop_unknown
-    df["mu_pop_average"] = mu_pop_average
-    df["mu_pop_blockbuster"] = mu_pop_blockbuster
     df["mu_pop_pref"] = mu_pop_pref
-
     df["mu_lang"] = mu_lang
-
     df["fuzzy_score"] = base_score
 
     # hrubý filter – vyhoď úplne slabé filmy
     df = df[df["fuzzy_score"] > 0.2]
 
     if df.empty:
+        if verbose:
+            print("❗ Po výpočte fuzzy skóre neostal žiadny film s dostatočným skóre.")
         return df
 
     # zoradenie
@@ -424,7 +453,9 @@ def _ask_int(prompt: str, default: int) -> int:
 
 
 if __name__ == "__main__":
-    print("=== Fuzzy vyhľadávanie filmov (bez názvu) ===")
+    print("==============================================")
+    print("🎬 Fuzzy vyhľadávač filmov (bez názvu, podľa pocitu)")
+    print("==============================================\n")
 
     length_pref = _ask_length_pref()
     year_pref = _ask_year_pref()
@@ -433,7 +464,54 @@ if __name__ == "__main__":
     lang_pref = _ask_lang_pref()
     adult_pref = _ask_adult_pref()
 
-    top_n = _ask_int("Koľko výsledkov chceš zobraziť? [20]: ", default=20)
+    top_n = _ask_int("\nKoľko výsledkov chceš zobraziť? [20]: ", default=20)
+
+    print("\n==============================================")
+    print("🧠 Ako nad tým uvažujem (nastavené preferencie)")
+    print("==============================================")
+
+    print("➡️  Dĺžka filmu: ",
+          {"short": "krátky", "medium": "stredný",
+           "long": "dlhý", "none": "nezáleží"}[length_pref])
+
+    print("➡️  Vek filmu: ",
+          {"new": "nové (0–5 rokov)",
+           "older": "staršie (5–20 rokov)",
+           "retro": "retro (>20 rokov)",
+           "none": "nezáleží"}[year_pref])
+
+    print("➡️  Rating: ",
+          {"excellent": "vynikajúce",
+           "good": "dobré",
+           "average": "priemerné",
+           "bad": "zlé",
+           "none": "nezáleží"}[rating_pref])
+
+    print("➡️  Popularita: ",
+          {"blockbuster": "blockbuster (veľmi populárne)",
+           "average": "priemerná popularita",
+           "unknown": "neznáme / low-pop",
+           "none": "nezáleží"}[pop_pref])
+
+    print("➡️  Jazyk: ",
+          {"EN": "angličtina", "CZ": "čeština", "SK": "slovenčina",
+           "ES": "španielčina", "DE": "nemčina",
+           "none": "nezáleží"}[lang_pref])
+
+    print("➡️  Adult filter: ",
+          {"non_adult_only": "iba ne-adult filmy",
+           "adult_only": "iba adult filmy",
+           "none": "adult nefiltrujem"}[adult_pref])
+
+    print("\n🔬 Fuzzy logika v skratke:")
+    print("   - Dĺžka: tri fuzzy množiny (krátky, stredný, dlhý) cez trapezoidné funkcie")
+    print("   - Vek: nové / staršie / retro podľa veku v rokoch")
+    print("   - Rating: 4 fuzzy kategórie, ale len pre filmy s vote_count ≥ 100")
+    print("   - Popularita: delenie na unknown / average / blockbuster podľa distribúcie v dátach")
+    print("   - Jazyk: crisp logika (1 ak jazyk sedí, inak 0)")
+    print("   - Výsledné skóre je vážený priemer týchto membershipov\n")
+
+    print("🚀 Poďme na to! Výsledky dopočítam a vypíšem tabuľku najlepších kandidátov.\n")
 
     results = fuzzy_search(
         length_pref=length_pref,
@@ -443,7 +521,11 @@ if __name__ == "__main__":
         lang_pref=lang_pref,
         adult_pref=adult_pref,
         top_n=top_n,
+        verbose=True,
     )
 
     pd.set_option("display.max_colwidth", 80)
+    print("\n==============================================")
+    print("📊 TOP výsledky podľa fuzzy skóre")
+    print("==============================================\n")
     print(results)
