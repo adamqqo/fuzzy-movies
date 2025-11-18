@@ -1,36 +1,67 @@
-Below is a clean, copy-paste-ready **README document** written in English.
-No bullshit, no fluff — formatted exactly like a proper GitHub README.
+# **Fuzzy Movie Search 🎥✨**
+
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)]()
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
+[![Kaggle Dataset](https://img.shields.io/badge/Data-Kaggle%20930k%20Movies-lightgrey.svg)](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
 
 ---
 
-# **README – Fuzzy Movie Search**
+## **📌 Overview**
 
-## **Overview**
+**Fuzzy Movie Search** is a Python tool for searching movies using **fuzzy logic**, rather than binary filters.
+Instead of “long movies only”, you get *how much* a movie matches your preference.
 
-Fuzzy Movie Search is a lightweight Python tool for fuzzy-logic-based movie filtering.
-It connects to a PostgreSQL database, loads movie metadata, applies fuzzy membership functions, computes a combined fuzzy score, and returns the top-ranked movies that match user preferences.
+It loads movie metadata from a PostgreSQL database, evaluates fuzzy membership functions, and ranks movies by a final **fuzzy_score**.
 
-The project includes both an **interactive CLI** and a **callable Python API**.
+Supports both:
 
----
-
-## **Features**
-
-* Fuzzy evaluation of:
-
-  * **Movie length** → short / medium / long
-  * **Movie age** → new / older / retro
-  * **Rating** → excellent / good / average / bad
-  * **Popularity** → blockbuster / average / unknown
-* Language filter (EN, CZ, SK, ES, DE)
-* Automatic weighting of selected criteria
-* Top-N ranking based on `fuzzy_score`
-* PostgreSQL connection via SQLAlchemy
-* `.env`-based configuration
+* ✔ Interactive CLI
+* ✔ Programmable API (import & call function)
 
 ---
 
-## **Project Structure**
+## **🎬 Dataset**
+
+This project uses the official public dataset:
+
+**TMDB Movies Dataset 2023 (930k+ movies)**
+🔗 [https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies](https://www.kaggle.com/datasets/asaniczka/tmdb-movies-dataset-2023-930k-movies)
+
+Included fields:
+
+* Title
+* Runtime
+* Release year
+* Popularity
+* Rating + vote count
+* Languages
+* Companies, countries, genres, etc.
+
+You import the dataset into PostgreSQL and the tool fetches data using SQLAlchemy.
+
+---
+
+## **✨ Features**
+
+| Category       | Options                            |
+| -------------- | ---------------------------------- |
+| **Length**     | short / medium / long              |
+| **Movie Age**  | new / older / retro                |
+| **Rating**     | excellent / good / average / bad   |
+| **Popularity** | blockbuster / average / unknown    |
+| **Language**   | EN, CZ, SK, ES, DE                 |
+| **Other**      | weighted scoring, flexible filters |
+
+Additional logic:
+
+* Rejects movies with very low fuzzy_score
+* Rejects movies with insufficient rating info (e.g., <100 votes)
+* Normalizes weights only for enabled filters
+
+---
+
+## **📁 Project Structure**
 
 ```
 project/
@@ -38,32 +69,21 @@ project/
 ├── fuzzy_search.py
 ├── config.py
 ├── requirements.txt
+├── README.md
 └── .env   (you create this)
 ```
 
 ---
 
-## **1. Installation**
+## **⚙ Installation**
 
-### **Install dependencies**
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Dependencies include:
-
-* pandas
-* numpy
-* SQLAlchemy
-* psycopg2-binary
-* python-dotenv
-
----
-
-## **2. Environment Setup**
-
-Create a file named **`.env`** in the project root:
+### 2. Create `.env` file
 
 ```
 DATABASE_URL=postgresql://user:password@host:port/database
@@ -75,47 +95,43 @@ Example:
 DATABASE_URL=postgresql://myuser:mypass@ep-example.eu-central-1.aws.neon.tech/neondb
 ```
 
-`config.py` loads this automatically and raises an error if missing.
-
 ---
 
-## **3. Running Fuzzy Search**
+## **▶ Running the Search**
 
-### **A) Interactive Mode (CLI)**
+### **A) Interactive CLI**
 
-Run the script:
+Run:
 
 ```bash
 python fuzzy_search.py
 ```
 
-It will ask for:
+You will be asked for:
 
-* length preference
-* movie age
+* movie length
+* year
 * rating
 * popularity
 * language
 * number of results
 
-Then prints the best fuzzy-matched movies.
+And you get sorted results in your terminal.
 
 ---
 
-### **B) Programmatic Usage (from another Python file)**
-
-Create a file `run_search.py`:
+### **B) Use it as a Python module**
 
 ```python
 from fuzzy_search import fuzzy_search
 
 df = fuzzy_search(
-    length_pref="short",
-    year_pref="new",
+    length_pref="medium",
+    year_pref="older",
     rating_pref="excellent",
     pop_pref="blockbuster",
     lang_pref="EN",
-    top_n=20,
+    top_n=15,
 )
 
 print(df)
@@ -129,23 +145,22 @@ python run_search.py
 
 ---
 
-### **C) Create a Shortcut (Alias)**
+### **C) Optional: Create a shortcut**
 
-#### **macOS / Linux**
-
-Add to `~/.bashrc` or `~/.zshrc`:
+#### macOS / Linux
 
 ```bash
-alias fuzzy="python /path/to/project/fuzzy_search.py"
+echo 'alias fuzzy="python /path/to/project/fuzzy_search.py"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
-#### **Windows PowerShell**
+#### Windows PowerShell
 
 ```powershell
 Set-Alias fuzzy "python C:\path\to\project\fuzzy_search.py"
 ```
 
-Then simply run:
+Then run:
 
 ```bash
 fuzzy
@@ -153,36 +168,80 @@ fuzzy
 
 ---
 
-## **4. Troubleshooting**
+## **🧠 How Fuzzy Logic Works (Short Version)**
 
-### **“DATABASE_URL is not set”**
+We use **trapezoidal membership functions** like:
 
-Your `.env` file is missing or empty → create it.
+```
+0 → rising edge → plateau → falling edge → 0
+```
+
+Example for "short movie":
+
+```
+0–60 min → rises
+60–90 min → full membership
+90–110 min → decreasing
+```
+
+Every category produces a membership value in **[0, 1]**.
+All categories are weighted and combined into:
+
+```
+fuzzy_score = Σ weight_i * membership_i
+```
+
+Movies with extremely low match score (<0.2) are removed.
+
+---
+
+## **🛠 Requirements**
+
+* Python 3.10+
+* PostgreSQL 14+
+* Libraries:
+
+  * pandas
+  * numpy
+  * SQLAlchemy
+  * psycopg2-binary
+  * python-dotenv
+
+---
+
+## **❗ Troubleshooting**
+
+### **DATABASE_URL is not set**
+
+Your `.env` is missing. Create one.
 
 ### **psycopg2 import errors**
-
-Reinstall dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### **High CPU / RAM usage**
+### **High CPU / RAM**
 
-In this version, nothing runs automatically on import —
-the fuzzy logic executes **only when you call the function or run the script**.
+Nothing runs automatically.
+The fuzzy search only executes when you run the function.
 
 ---
 
-## **5. Quick Summary (copy-ready snippet)**
+## **📌 Quick Copy Snippet**
 
 ```
 pip install -r requirements.txt
 Create .env with DATABASE_URL
-Run interactively: python fuzzy_search.py
-Or programmatically via: from fuzzy_search import fuzzy_search
-Supports fuzzy filters for length, age, rating, popularity, language
-Returns top-N results sorted by fuzzy_score
+Run: python fuzzy_search.py
+Dataset: Kaggle TMDB Movies 2023 (930k+ movies)
+Supports fuzzy filters: length, year, rating, popularity, language
+Outputs ranked results by fuzzy_score
 ```
 
 ---
+
+## **📜 License**
+
+MIT License — free to use, modify, and distribute.
+
