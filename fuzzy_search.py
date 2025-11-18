@@ -89,7 +89,7 @@ def fuzzy_search(
     pop_pref: str = "none",      # "blockbuster", "average", "unknown", "none"
     lang_pref: str = "none",     # "EN", "CZ", "SK", "ES", "DE", "none"
     adult_pref: str = "non_adult_only",  # "adult_only", "non_adult_only", "none"
-    limit_rows_from_db: int = 50_000,
+    limit_rows_from_db: int = 500_000,
     top_n: int = 30,
     current_year: int = 2025,
 ) -> pd.DataFrame:
