@@ -292,6 +292,3 @@ Try loosening preferences.
 # 📜 License
 
 MIT License.
-
-
-Just say the word.
