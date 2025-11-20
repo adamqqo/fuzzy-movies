@@ -70,7 +70,7 @@ Each category produces a score from **0.0 to 1.0**, representing how well the mo
 
 The final result is a weighted combination of these scores.
 
-Below is a simple, user-friendly explanation of each part:
+Below is a simple explanation of each part:
 
 ---
 
@@ -85,6 +85,7 @@ Example:
 * A 150-minute film fits “long” strongly.
 
 This is done using smooth, trapezoid-shaped curves so movies transition naturally between categories.
+
 
 ---
 
