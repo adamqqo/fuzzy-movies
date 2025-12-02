@@ -68,106 +68,7 @@ This database includes:
 The search engine evaluates each movie using several **fuzzy categories**.
 Each category produces a score from **0.0 to 1.0**, representing how well the movie matches your preference.
 
-The final result is a weighted combination of these scores.
-
-Below is a simple explanation of each part:
-
----
-
-## 1️⃣ Movie Length (short / medium / long)
-
-Length is not treated as a strict cutoff.
-
-Example:
-
-* A 70-minute film fits “short” strongly.
-* A 95-minute film fits “short” only partially.
-* A 150-minute film fits “long” strongly.
-
-This is done using smooth, trapezoid-shaped curves so movies transition naturally between categories.
-
-
----
-
-## 2️⃣ Movie Age (new / older / retro)
-
-Instead of choosing a hard release year like “after 2020,” the system evaluates by **movie age**:
-
-* **new:** 0–5 years
-* **older:** 5–20 years
-* **retro:** 20+ years
-
-A 7-year-old film, for example, partially fits both “new” and “older,” which makes results more flexible.
-
----
-
-## 3️⃣ Rating (excellent / good / average / bad)
-
-Ratings also use smooth categories:
-
-* excellent: 8.5+
-* good: around 7
-* average: around 5.5
-* bad: under ~5
-
-Additionally:
-**Movies with fewer than 100 votes do not contribute rating score**
-(because they aren’t reliable).
-
----
-
-## 4️⃣ Popularity (unknown / average / blockbuster)
-
-Popularity varies wildly between datasets, so the system automatically adapts.
-
-It splits movies into:
-
-* low popularity
-* middle range
-* top performers
-
-This is calculated using percentiles, so the three categories adjust to the dataset’s distribution.
-
----
-
-## 5️⃣ Language
-
-Language matching is simple and direct:
-
-If your preference is EN:
-
-* movies that contain “en” in spoken or original language → score 1.0
-* all others → 0.0
-
-Since language does not have degrees like “somewhat English,” this is intentionally crisp.
-
----
-
-## 6️⃣ Adult Content Filter
-
-This is handled *before* applying fuzzy logic:
-
-* only non-adult movies
-* only adult movies
-* include both
-
-This ensures adult filtering remains predictable and safe.
-
----
-
-## 7️⃣ Weighted Scoring
-
-Not all preferences are equally important.
-If a user selects a preference, it receives a **higher weight**.
-If a preference is skipped, it gets a **lower weight**.
-
-Weights are always normalized so they add up to **1.0**.
-
----
-
-## 8️⃣ Final Score
-
-Every movie receives a final score:
+The final result is a weighted combination of these scores : 
 
 ```
 fuzzy_score =
@@ -288,8 +189,3 @@ Ensure:
 Some combinations are too strict.
 Try loosening preferences.
 
----
-
-# 📜 License
-
-MIT License.
